@@ -396,19 +396,10 @@ llmRateSkipped=${stats.llmRateSkipped}
 leads=${stats.leads}
 
 TOP:
-${lines.length ? "(sent in batches below)" : "(no leads found)"}`;
+${lines.length ? "(already sent via partial chunks)" : "(no leads found)"}`;
 
   try {
     await client.sendMessage("me", { message: report });
-    if (lines.length) {
-      for (let i = 0; i < lines.length; i += bf.partialBatchSize) {
-        const chunk = lines.slice(i, i + bf.partialBatchSize);
-        const partNo = Math.floor(i / bf.partialBatchSize) + 1;
-        const partTotal = Math.ceil(lines.length / bf.partialBatchSize);
-        const topMsg = `🧲 Backfill TOP part ${partNo}/${partTotal}\n\n${chunk.join("\n")}`;
-        await client.sendMessage("me", { message: topMsg });
-      }
-    }
     stats.sendOk = true;
   } catch (e) {
     stats.sendErr = String(e?.message || e);

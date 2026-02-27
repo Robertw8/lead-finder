@@ -16,11 +16,25 @@ function i(name, def, min = 0) {
   return Math.max(min, Math.floor(v));
 }
 
+function pickByAccount(baseName, account) {
+  if (!account) return process.env[baseName];
+  const accKey = `${baseName}_${account}`;
+  return process.env[accKey] ?? process.env[baseName];
+}
+
+const tgAccountRaw = process.env.TG_ACCOUNT;
+const tgAccount =
+  tgAccountRaw != null && String(tgAccountRaw).trim() !== ""
+    ? String(tgAccountRaw).trim()
+    : null;
+
 module.exports = {
   tg: {
-    apiId: n("TG_API_ID", 0),
-    apiHash: process.env.TG_API_HASH,
-    session: process.env.TG_SESSION,
+    account: tgAccount || "default",
+    apiId: Number(pickByAccount("TG_API_ID", tgAccount)) || 0,
+    apiHash: pickByAccount("TG_API_HASH", tgAccount),
+    phone: pickByAccount("TG_PHONE", tgAccount),
+    session: pickByAccount("TG_SESSION", tgAccount),
   },
 
   openai: {

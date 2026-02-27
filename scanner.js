@@ -1,4 +1,5 @@
 require("dotenv").config();
+const cfg = require("./src/config.js");
 
 const fs = require("fs");
 const path = require("path");
@@ -12,9 +13,9 @@ const { NewMessage } = require("telegram/events");
 const OpenAI = require("openai");
 
 // -------------------- ENV --------------------
-const apiId = Number(process.env.TG_API_ID);
-const apiHash = process.env.TG_API_HASH;
-const sessionStr = process.env.TG_SESSION;
+const apiId = cfg.tg.apiId;
+const apiHash = cfg.tg.apiHash;
+const sessionStr = cfg.tg.session;
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
@@ -26,7 +27,9 @@ const DEBUG = String(process.env.DEBUG || "0") === "1";
 const DISABLE_PREFILTER = String(process.env.DISABLE_PREFILTER || "0") === "1";
 
 if (!apiId || !apiHash || !sessionStr) {
-  throw new Error("Заполни TG_API_ID, TG_API_HASH, TG_SESSION в .env");
+  throw new Error(
+    "Заполни TG_ACCOUNT + TG_API_ID_<N>/TG_API_HASH_<N>/TG_SESSION_<N> (или базовые TG_API_ID/TG_API_HASH/TG_SESSION) в .env",
+  );
 }
 if (!OPENAI_API_KEY) {
   throw new Error("Заполни OPENAI_API_KEY в .env");
