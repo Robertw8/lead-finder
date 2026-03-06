@@ -33,8 +33,6 @@ function createDigest(
         const preview = (x.text || "").replace(/\s+/g, " ").slice(0, previewChars);
         return `${i + 1}) [${x.chatTitle}] score=${x.score} cat=${x.category}
 ${preview}
-DM1: ${x.dm1 || "-"}
-DM2: ${x.dm2 || "-"}
 ${x.link}
 `;
       });

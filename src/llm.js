@@ -34,7 +34,6 @@ lead=false если:
   "score": 0-100,
   "category": "question|problem|opinion|debate|story|fear|brag|scam|other",
   "angle": "как зайти в личку (1-2 предложения, конкретно)",
-  "dm_drafts": ["короткий DM #1", "короткий DM #2"],
   "why": "почему это лид/не лид (1 предложение)"
 }
 

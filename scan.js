@@ -5,6 +5,7 @@ const { initDb } = require("./src/db.js");
 const {
   prefilter,
   looksLikePromoOrBot,
+  looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
   looksLikeUkrainian,
   shouldScanChatEntity,
@@ -58,6 +59,7 @@ function makeMinuteLimiter(maxPerMin) {
     skipSelfPost: 0,
     skipPrefilter: 0,
     skipPromo: 0,
+    skipBuySell: 0,
     skipUkrainian: 0,
     skipQuestionClaim: 0,
     skipRateLimit: 0,
@@ -106,7 +108,7 @@ function makeMinuteLimiter(maxPerMin) {
       ? new Date(stats.lastLeadAt).toISOString()
       : "-";
     console.log(
-      `[scan] seen=${stats.seen} leads=${stats.leads} cache=${stats.llmCacheHits} llmCalls=${stats.llmCalls} skips(chatType=${stats.skipChatType},selfPost=${stats.skipSelfPost},prefilter=${stats.skipPrefilter},promo=${stats.skipPromo},ua=${stats.skipUkrainian},qclaim=${stats.skipQuestionClaim},rate=${stats.skipRateLimit},noChat=${stats.noChat},noText=${stats.noText}) lastMsg=${lastMsg} lastLead=${lastLead}`,
+      `[scan] seen=${stats.seen} leads=${stats.leads} cache=${stats.llmCacheHits} llmCalls=${stats.llmCalls} skips(chatType=${stats.skipChatType},selfPost=${stats.skipSelfPost},prefilter=${stats.skipPrefilter},promo=${stats.skipPromo},buySell=${stats.skipBuySell},ua=${stats.skipUkrainian},qclaim=${stats.skipQuestionClaim},rate=${stats.skipRateLimit},noChat=${stats.noChat},noText=${stats.noText}) lastMsg=${lastMsg} lastLead=${lastLead}`,
     );
   }, cfg.scanHeartbeatSec * 1000);
 
@@ -168,6 +170,10 @@ function makeMinuteLimiter(maxPerMin) {
       }
       if (cfg.rejectPromoOrBot && looksLikePromoOrBot(text)) {
         stats.skipPromo++;
+        return;
+      }
+      if (cfg.rejectBuySellOffers && looksLikeBuySellOffer(text)) {
+        stats.skipBuySell++;
         return;
       }
       if (cfg.rejectUkrainian && looksLikeUkrainian(text)) {

@@ -1,9 +1,19 @@
 function prefilter(text) {
   if (!text) return false;
   const t = text.trim();
-  if (t.length < 16) return false;
-
   const low = t.toLowerCase();
+
+  // Разрешаем короткие тикерные сообщения и короткие запросы на разбор.
+  if (t.length < 12) {
+    const compact = t.replace(/\s+/g, "");
+    const tickerOnly = /^[A-Za-z]{2,6}$/.test(compact);
+    const coinWithPair =
+      /^(btc|eth|sol|bnb|xrp|ada|doge|dot|trx|ltc|avax|matic|ton|link|uni|atom)(usdt|usd|btc|eth)?$/i.test(
+        compact,
+      );
+    const shortAsk = /\b(разбор|мнение|идея|сетап|вход)\b/i.test(low);
+    if (!(tickerOnly || coinWithPair || shortAsk)) return false;
+  }
 
   // реклама/рефки
   if (/(airdrop|giveaway|promo|промо|реф|ref|bit\.ly|tinyurl)/.test(low))
@@ -22,11 +32,31 @@ function prefilter(text) {
 function looksLikeQuestionOrClaim(text) {
   if (!text) return false;
   const t = text.trim();
-  if (t.length < 14) return false;
   const low = t.toLowerCase();
+  const compact = t.replace(/\s+/g, "");
+
+  // Однословные тикеры типа "SOL", "BTC", "ETH" считаем сигналом интереса.
+  if (
+    /^[A-Za-z]{2,6}$/.test(compact) ||
+    /^(btc|eth|sol|bnb|xrp|ada|doge|dot|trx|ltc|avax|matic|ton|link|uni|atom)(usdt|usd|btc|eth)?$/i.test(
+      compact,
+    )
+  ) {
+    return true;
+  }
+
+  if (t.length < 8) return false;
 
   if (/\?/.test(t)) return true;
   if (/\b(как|почему|зачем|когда|где|кто|что|какой|какая|какие)\b/i.test(low))
+    return true;
+
+  // Явные просьбы / запросы на разбор.
+  if (
+    /\b(подскажите|посоветуйте|помогите|нужен|нужна|нужно|разбор|разберите|мнение|оцените|что\s+по|кто\s+смотрел|взгляд\s+на|идея\s+по|сетап)\b/i.test(
+      low,
+    )
+  )
     return true;
 
   if (
@@ -87,6 +117,36 @@ function looksLikePromoOrBot(text) {
   const labelFields = (low.match(/[:：]/g) || []).length;
   if (labelFields >= 3 && /(пара|котировка|пункт|сигнал|вход|выход)/.test(low))
     return true;
+
+  return false;
+}
+
+function looksLikeBuySellOffer(text) {
+  if (!text) return false;
+  const low = text.toLowerCase();
+
+  // Явные формулировки торгового оффера.
+  if (
+    /\b(куплю|продам|покупаю|продаю|buying|selling|wtb|wts)\b/i.test(low)
+  ) {
+    return true;
+  }
+
+  // Англ. buy/sell + маркеры p2p/otc/прямого контакта.
+  if (
+    /\b(buy|sell)\b/i.test(low) &&
+    /\b(otc|p2p|usdt|dm|pm|в\s*лс|в\s*личку|личк[ауе]|пишите)\b/i.test(low)
+  ) {
+    return true;
+  }
+
+  // Частые русские офферы обмена/сделки.
+  if (
+    /\b(обменяю|обмен|сделка|купля|продажа)\b/i.test(low) &&
+    /\b(в\s*лс|в\s*личку|пишите|срочно|otc|p2p)\b/i.test(low)
+  ) {
+    return true;
+  }
 
   return false;
 }
@@ -152,6 +212,7 @@ function isSelfChannelPost(msg, sender, chatEntity) {
 module.exports = {
   prefilter,
   looksLikePromoOrBot,
+  looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
   looksLikeUkrainian,
   shouldScanChatEntity,

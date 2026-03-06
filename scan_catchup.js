@@ -5,6 +5,7 @@ const { initDb } = require("./src/db.js");
 const {
   prefilter,
   looksLikePromoOrBot,
+  looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
   looksLikeUkrainian,
   shouldScanChatEntity,
@@ -64,6 +65,7 @@ function dialogActivitySec(dialog) {
   const { insertLead, getCache, putCache } = initDb("leads.db");
   const llm = createLlm(cfg.openai, cfg.llmConcurrency);
   const client = await createClient(cfg.tg);
+  const startedAt = Date.now();
 
   console.log("✅ GramJS connected");
   console.log(
@@ -76,8 +78,12 @@ function dialogActivitySec(dialog) {
   console.log(
     "catchup:",
     cfg.scanCatchupEnabled
-      ? `on every ${cfg.scanCatchupEverySec}s lookback=${cfg.scanCatchupLookbackMin}m dialogs=${cfg.scanCatchupDialogsLimit} perChat=${cfg.scanCatchupPerChatLimit}`
+      ? `on every ${cfg.scanCatchupEverySec}s lookback=${cfg.scanCatchupLookbackMin}m dialogs=${cfg.scanCatchupDialogsLimit}/${cfg.scanCatchupDialogsPoolLimit} perChat=${cfg.scanCatchupPerChatLimit} rotate=${cfg.scanCatchupRotateDialogs ? "on" : "off"}`
       : "off",
+  );
+  console.log(
+    "maxRuntimeSec:",
+    cfg.scanCatchupMaxRuntimeSec > 0 ? cfg.scanCatchupMaxRuntimeSec : "off",
   );
 
   const chatCache = new Map();
@@ -92,6 +98,7 @@ function dialogActivitySec(dialog) {
     skipSelfPost: 0,
     skipPrefilter: 0,
     skipPromo: 0,
+    skipBuySell: 0,
     skipUkrainian: 0,
     skipQuestionClaim: 0,
     skipRateLimit: 0,
@@ -134,7 +141,32 @@ function dialogActivitySec(dialog) {
     async (text) => client.sendMessage("me", { message: text }),
   );
 
+  let heartbeatTimer = null;
+  let catchupInterval = null;
+  let stopTimer = null;
+  let stopping = false;
+  let catchupDialogCursor = 0;
+
+  async function gracefulStop(reason) {
+    if (stopping) return;
+    stopping = true;
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (catchupInterval) clearInterval(catchupInterval);
+    if (stopTimer) clearTimeout(stopTimer);
+
+    console.log(`[scan+] stopping: ${reason}`);
+    try {
+      await digest.flush();
+    } catch (e) {
+      console.error("final digest flush error:", e?.message || e);
+    }
+    const uptimeSec = Math.floor((Date.now() - startedAt) / 1000);
+    console.log(`[scan+] stopped. uptimeSec=${uptimeSec} leads=${stats.leads}`);
+    process.exit(0);
+  }
+
   async function processMessage(message, chatHint, source) {
+    if (stopping) return;
     stats.seen++;
     if (source === "realtime") stats.realtimeSeen++;
     if (source === "catchup") stats.catchupSeen++;
@@ -179,6 +211,10 @@ function dialogActivitySec(dialog) {
     }
     if (cfg.rejectPromoOrBot && looksLikePromoOrBot(text)) {
       stats.skipPromo++;
+      return;
+    }
+    if (cfg.rejectBuySellOffers && looksLikeBuySellOffer(text)) {
+      stats.skipBuySell++;
       return;
     }
     if (cfg.rejectUkrainian && looksLikeUkrainian(text)) {
@@ -279,20 +315,43 @@ function dialogActivitySec(dialog) {
 
   let catchupRunning = false;
   async function runCatchup() {
+    if (stopping) return;
     if (!cfg.scanCatchupEnabled || catchupRunning) return;
     catchupRunning = true;
     try {
       const sinceSec =
         Math.floor(Date.now() / 1000) - cfg.scanCatchupLookbackMin * 60;
+      const poolLimit = Math.max(
+        cfg.scanCatchupDialogsPoolLimit,
+        cfg.scanCatchupDialogsLimit,
+      );
       const rawDialogs = await client.getDialogs({
-        limit: cfg.scanCatchupDialogsLimit,
+        limit: poolLimit,
       });
-      const dialogs = [...rawDialogs].sort(
+      const dialogsByActivity = [...rawDialogs].sort(
         (a, b) => dialogActivitySec(b) - dialogActivitySec(a),
       );
+      let dialogs = dialogsByActivity;
+      if (
+        cfg.scanCatchupRotateDialogs &&
+        dialogsByActivity.length > cfg.scanCatchupDialogsLimit
+      ) {
+        const size = dialogsByActivity.length;
+        const start = catchupDialogCursor % size;
+        const rotated = [];
+        for (let i = 0; i < cfg.scanCatchupDialogsLimit; i++) {
+          rotated.push(dialogsByActivity[(start + i) % size]);
+        }
+        dialogs = rotated;
+        catchupDialogCursor =
+          (start + cfg.scanCatchupDialogsLimit) % dialogsByActivity.length;
+      } else {
+        dialogs = dialogsByActivity.slice(0, cfg.scanCatchupDialogsLimit);
+      }
 
       let scannedChats = 0;
       for (const d of dialogs) {
+        if (stopping) break;
         const entity = d.entity;
         const peer = d.inputEntity || d.entity;
 
@@ -310,6 +369,7 @@ function dialogActivitySec(dialog) {
         for await (const msg of client.iterMessages(peer, {
           limit: cfg.scanCatchupPerChatLimit,
         })) {
+          if (stopping) break;
           processedInChat++;
           if (
             cfg.scanCatchupMsgPauseEvery > 0 &&
@@ -332,7 +392,7 @@ function dialogActivitySec(dialog) {
       stats.catchupChats += scannedChats;
       stats.lastCatchupAt = Date.now();
       console.log(
-        `[catchup] done runs=${stats.catchupRuns} scannedChats=${scannedChats} lookbackMin=${cfg.scanCatchupLookbackMin}`,
+        `[catchup] done runs=${stats.catchupRuns} scannedChats=${scannedChats} pool=${dialogsByActivity.length} cursor=${catchupDialogCursor} lookbackMin=${cfg.scanCatchupLookbackMin}`,
       );
     } catch (e) {
       console.error("[catchup] error:", e?.message || e);
@@ -341,7 +401,7 @@ function dialogActivitySec(dialog) {
     }
   }
 
-  setInterval(() => {
+  heartbeatTimer = setInterval(() => {
     const lastMsg = stats.lastMessageAt
       ? new Date(stats.lastMessageAt).toISOString()
       : "-";
@@ -352,7 +412,7 @@ function dialogActivitySec(dialog) {
       ? new Date(stats.lastCatchupAt).toISOString()
       : "-";
     console.log(
-      `[scan+] seen=${stats.seen} rt=${stats.realtimeSeen} cu=${stats.catchupSeen} leads=${stats.leads} cache=${stats.llmCacheHits} llmCalls=${stats.llmCalls} skips(out=${stats.skipOutgoing},chatType=${stats.skipChatType},selfPost=${stats.skipSelfPost},prefilter=${stats.skipPrefilter},promo=${stats.skipPromo},ua=${stats.skipUkrainian},qclaim=${stats.skipQuestionClaim},rate=${stats.skipRateLimit},noChat=${stats.noChat},noText=${stats.noText}) catchup(runs=${stats.catchupRuns},chats=${stats.catchupChats},last=${lastCatchup}) lastMsg=${lastMsg} lastLead=${lastLead}`,
+      `[scan+] seen=${stats.seen} rt=${stats.realtimeSeen} cu=${stats.catchupSeen} leads=${stats.leads} cache=${stats.llmCacheHits} llmCalls=${stats.llmCalls} skips(out=${stats.skipOutgoing},chatType=${stats.skipChatType},selfPost=${stats.skipSelfPost},prefilter=${stats.skipPrefilter},promo=${stats.skipPromo},buySell=${stats.skipBuySell},ua=${stats.skipUkrainian},qclaim=${stats.skipQuestionClaim},rate=${stats.skipRateLimit},noChat=${stats.noChat},noText=${stats.noText}) catchup(runs=${stats.catchupRuns},chats=${stats.catchupChats},last=${lastCatchup}) lastMsg=${lastMsg} lastLead=${lastLead}`,
     );
   }, cfg.scanHeartbeatSec * 1000);
 
@@ -365,9 +425,17 @@ function dialogActivitySec(dialog) {
 
   if (cfg.scanCatchupEnabled) {
     await runCatchup();
-    setInterval(
+    catchupInterval = setInterval(
       () => runCatchup().catch(() => {}),
       cfg.scanCatchupEverySec * 1000,
     );
+  }
+
+  if (cfg.scanCatchupMaxRuntimeSec > 0) {
+    stopTimer = setTimeout(() => {
+      gracefulStop(`max runtime ${cfg.scanCatchupMaxRuntimeSec}s reached`).catch(
+        (e) => console.error("stop error:", e?.message || e),
+      );
+    }, cfg.scanCatchupMaxRuntimeSec * 1000);
   }
 })();

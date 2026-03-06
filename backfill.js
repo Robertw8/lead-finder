@@ -3,6 +3,7 @@ const { initDb } = require("./src/db.js");
 const {
   prefilter,
   looksLikePromoOrBot,
+  looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
   looksLikeUkrainian,
   shouldScanChatEntity,
@@ -118,6 +119,7 @@ function dialogActivitySec(dialog) {
     msgsInWindow: 0,
     msgsText: 0,
     msgsPassedFilters: 0,
+    msgsSkippedBuySell: 0,
     msgsSkippedUkrainian: 0,
     llmCalls: 0,
     llmCacheHits: 0,
@@ -144,8 +146,6 @@ function dialogActivitySec(dialog) {
           .slice(0, bf.partialPreviewChars);
         return `${i + 1}) [${x.chatTitle}] score=${x.score} cat=${x.category}
 ${preview}
-DM1: ${x.dm1 || "-"}
-DM2: ${x.dm2 || "-"}
 ${x.link}`;
       });
 
@@ -240,6 +240,10 @@ ${lines.join("\n\n")}`;
       if (!SOFT_MODE) {
         if (!cfg.disablePrefilter && !prefilter(text)) continue;
         if (cfg.rejectPromoOrBot && looksLikePromoOrBot(text)) continue;
+        if (cfg.rejectBuySellOffers && looksLikeBuySellOffer(text)) {
+          stats.msgsSkippedBuySell++;
+          continue;
+        }
         if (cfg.rejectUkrainian && looksLikeUkrainian(text)) {
           stats.msgsSkippedUkrainian++;
           continue;
@@ -368,8 +372,6 @@ ${lines.join("\n\n")}`;
       .slice(0, bf.finalPreviewChars);
     return `${i + 1}) [${x.chatTitle}] score=${x.score} cat=${x.category}
 ${preview}
-DM1: ${x.dm1 || "-"}
-DM2: ${x.dm2 || "-"}
 ${x.link}
 `;
   });
@@ -387,6 +389,7 @@ msgsRead=${stats.msgsRead}
 msgsInWindow=${stats.msgsInWindow}
 msgsText=${stats.msgsText}
 msgsPassedFilters=${stats.msgsPassedFilters}
+msgsSkippedBuySell=${stats.msgsSkippedBuySell}
 msgsSkippedUkrainian=${stats.msgsSkippedUkrainian}
 
 llmCalls=${stats.llmCalls}
