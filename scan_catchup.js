@@ -7,6 +7,8 @@ const {
   looksLikePromoOrBot,
   looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
+  looksLikeQuestion,
+  looksLikeSweetQuestion,
   looksLikeUkrainian,
   shouldScanChatEntity,
   isSelfChannelPost,
@@ -19,6 +21,7 @@ const {
   normId,
 } = require("./src/tg.js");
 const { createDigest } = require("./src/digest.js");
+const { computePriority } = require("./src/ranking.js");
 
 function makeMinuteLimiter(maxPerMin) {
   let bucket = [];
@@ -76,6 +79,10 @@ function dialogActivitySec(dialog) {
   console.log("scanGroups:", cfg.scanGroups, "scanChannels:", cfg.scanChannels);
   console.log("incomingOnly:", cfg.scanIncomingOnly);
   console.log(
+    "questionMode:",
+    `onlyQuestions=${cfg.onlyQuestions} onlySweetQuestions=${cfg.onlySweetQuestions} outreachFitMin=${cfg.outreachFitMin}`,
+  );
+  console.log(
     "catchup:",
     cfg.scanCatchupEnabled
       ? `on every ${cfg.scanCatchupEverySec}s lookback=${cfg.scanCatchupLookbackMin}m dialogs=${cfg.scanCatchupDialogsLimit}/${cfg.scanCatchupDialogsPoolLimit} perChat=${cfg.scanCatchupPerChatLimit} rotate=${cfg.scanCatchupRotateDialogs ? "on" : "off"}`
@@ -101,11 +108,16 @@ function dialogActivitySec(dialog) {
     skipBuySell: 0,
     skipUkrainian: 0,
     skipQuestionClaim: 0,
+    skipQuestionOnly: 0,
+    skipSweetQuestion: 0,
     skipRateLimit: 0,
     llmCalls: 0,
     llmCacheHits: 0,
     llmNotLead: 0,
     llmLowScore: 0,
+    llmNotQuestion: 0,
+    llmNotSweetQuestion: 0,
+    llmLowOutreachFit: 0,
     leads: 0,
     catchupRuns: 0,
     catchupChats: 0,
@@ -225,6 +237,14 @@ function dialogActivitySec(dialog) {
       stats.skipQuestionClaim++;
       return;
     }
+    if (cfg.onlyQuestions && !looksLikeQuestion(text)) {
+      stats.skipQuestionOnly++;
+      return;
+    }
+    if (cfg.onlySweetQuestions && !looksLikeSweetQuestion(text)) {
+      stats.skipSweetQuestion++;
+      return;
+    }
 
     const chatInfo = await resolveChatInfo(chat, chatCache);
     const msgId = message.id;
@@ -269,6 +289,23 @@ function dialogActivitySec(dialog) {
       stats.llmLowScore++;
       return;
     }
+    const llmQuestion = llmRes.is_question || llmRes.category === "question";
+    if (cfg.onlyQuestions && !llmQuestion) {
+      stats.llmNotQuestion++;
+      return;
+    }
+    const fitScore = llmRes.outreach_fit ?? llmRes.score ?? 0;
+    const llmSweet =
+      llmRes.sweet_question || (llmQuestion && fitScore >= cfg.outreachFitMin);
+    if (cfg.onlySweetQuestions && !llmSweet) {
+      stats.llmNotSweetQuestion++;
+      return;
+    }
+    if (cfg.onlySweetQuestions && fitScore < cfg.outreachFitMin) {
+      stats.llmLowOutreachFit++;
+      return;
+    }
+    const priority = computePriority(llmRes);
 
     const saved = insertLead.run({
       chat_id: chatInfo.id,
@@ -293,7 +330,10 @@ function dialogActivitySec(dialog) {
 
     digest.add({
       chatTitle: chatInfo.title,
-      score: llmRes.score ?? 0,
+      score: priority.score,
+      priorityScore: priority.priorityScore,
+      leadArchetype: priority.leadArchetype,
+      painLevel: priority.painLevel,
       category: llmRes.category || "other",
       text,
       angle: llmRes.angle || "",
@@ -412,7 +452,7 @@ function dialogActivitySec(dialog) {
       ? new Date(stats.lastCatchupAt).toISOString()
       : "-";
     console.log(
-      `[scan+] seen=${stats.seen} rt=${stats.realtimeSeen} cu=${stats.catchupSeen} leads=${stats.leads} cache=${stats.llmCacheHits} llmCalls=${stats.llmCalls} skips(out=${stats.skipOutgoing},chatType=${stats.skipChatType},selfPost=${stats.skipSelfPost},prefilter=${stats.skipPrefilter},promo=${stats.skipPromo},buySell=${stats.skipBuySell},ua=${stats.skipUkrainian},qclaim=${stats.skipQuestionClaim},rate=${stats.skipRateLimit},noChat=${stats.noChat},noText=${stats.noText}) catchup(runs=${stats.catchupRuns},chats=${stats.catchupChats},last=${lastCatchup}) lastMsg=${lastMsg} lastLead=${lastLead}`,
+      `[scan+] seen=${stats.seen} rt=${stats.realtimeSeen} cu=${stats.catchupSeen} leads=${stats.leads} cache=${stats.llmCacheHits} llmCalls=${stats.llmCalls} skips(out=${stats.skipOutgoing},chatType=${stats.skipChatType},selfPost=${stats.skipSelfPost},prefilter=${stats.skipPrefilter},promo=${stats.skipPromo},buySell=${stats.skipBuySell},ua=${stats.skipUkrainian},qclaim=${stats.skipQuestionClaim},qonly=${stats.skipQuestionOnly},qsweet=${stats.skipSweetQuestion},rate=${stats.skipRateLimit},noChat=${stats.noChat},noText=${stats.noText}) llmSkips(notLead=${stats.llmNotLead},lowScore=${stats.llmLowScore},notQ=${stats.llmNotQuestion},notSweet=${stats.llmNotSweetQuestion},lowFit=${stats.llmLowOutreachFit}) catchup(runs=${stats.catchupRuns},chats=${stats.catchupChats},last=${lastCatchup}) lastMsg=${lastMsg} lastLead=${lastLead}`,
     );
   }, cfg.scanHeartbeatSec * 1000);
 

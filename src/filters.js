@@ -1,19 +1,9 @@
 function prefilter(text) {
   if (!text) return false;
   const t = text.trim();
-  const low = t.toLowerCase();
+  if (t.length < 16) return false;
 
-  // Разрешаем короткие тикерные сообщения и короткие запросы на разбор.
-  if (t.length < 12) {
-    const compact = t.replace(/\s+/g, "");
-    const tickerOnly = /^[A-Za-z]{2,6}$/.test(compact);
-    const coinWithPair =
-      /^(btc|eth|sol|bnb|xrp|ada|doge|dot|trx|ltc|avax|matic|ton|link|uni|atom)(usdt|usd|btc|eth)?$/i.test(
-        compact,
-      );
-    const shortAsk = /\b(разбор|мнение|идея|сетап|вход)\b/i.test(low);
-    if (!(tickerOnly || coinWithPair || shortAsk)) return false;
-  }
+  const low = t.toLowerCase();
 
   // реклама/рефки
   if (/(airdrop|giveaway|promo|промо|реф|ref|bit\.ly|tinyurl)/.test(low))
@@ -33,30 +23,10 @@ function looksLikeQuestionOrClaim(text) {
   if (!text) return false;
   const t = text.trim();
   const low = t.toLowerCase();
-  const compact = t.replace(/\s+/g, "");
-
-  // Однословные тикеры типа "SOL", "BTC", "ETH" считаем сигналом интереса.
-  if (
-    /^[A-Za-z]{2,6}$/.test(compact) ||
-    /^(btc|eth|sol|bnb|xrp|ada|doge|dot|trx|ltc|avax|matic|ton|link|uni|atom)(usdt|usd|btc|eth)?$/i.test(
-      compact,
-    )
-  ) {
-    return true;
-  }
-
-  if (t.length < 8) return false;
+  if (t.length < 14) return false;
 
   if (/\?/.test(t)) return true;
   if (/\b(как|почему|зачем|когда|где|кто|что|какой|какая|какие)\b/i.test(low))
-    return true;
-
-  // Явные просьбы / запросы на разбор.
-  if (
-    /\b(подскажите|посоветуйте|помогите|нужен|нужна|нужно|разбор|разберите|мнение|оцените|что\s+по|кто\s+смотрел|взгляд\s+на|идея\s+по|сетап)\b/i.test(
-      low,
-    )
-  )
     return true;
 
   if (
@@ -69,15 +39,53 @@ function looksLikeQuestionOrClaim(text) {
   if (/\b(это скам|не скам|это ошибка|это бред|рынок пойдет|цена будет)\b/i.test(low))
     return true;
 
-  // лёгкое расширение: нейтральные тезисы/наблюдения
+  return false;
+}
+
+function looksLikeQuestion(text) {
+  if (!text) return false;
+  const t = text.trim();
+  const low = t.toLowerCase();
+  if (t.length < 14) return false;
+
+  if (/\?/.test(t)) return true;
   if (
-    /\b(кажется|похоже|по факту|на мой взгляд|по моему опыту|в итоге|получается|вышло так)\b/i.test(
+    /\b(как|почему|зачем|когда|где|кто|что|какой|какая|какие|можно ли|нужно ли|стоит ли)\b/i.test(
       low,
     )
-  )
+  ) {
     return true;
+  }
 
   return false;
+}
+
+function looksLikeSweetQuestion(text) {
+  if (!looksLikeQuestion(text)) return false;
+  const low = text.toLowerCase();
+
+  // Пустые "рыночные болталки", по которым сложно делать полезный аутрич.
+  if (
+    /\b(что думаете|какие мысли|кто в лонге|кто в шорте|когда туземун|куда пойд[её]т|рост или падение)\b/i.test(
+      low,
+    )
+  ) {
+    return false;
+  }
+
+  // Сигналы "практической" боли/намерения: ошибка, деньги, инструмент, шаги.
+  const intentHits = (
+    low.match(
+      /(подскажите|помогите|кто сталкивался|что делать|как решить|как настроить|как выбрать|можно ли|нужно ли|почему не)/g,
+    ) || []
+  ).length;
+  const painHits = (
+    low.match(
+      /(не работает|ошибк|баг|не приходит|не проход|не могу|завис|блок|вериф|комисс|депозит|вывод|кошел[её]к|бирж|бот|api|стратег|арбитраж|ликвид|безопас|скам)/g,
+    ) || []
+  ).length;
+
+  return intentHits + painHits > 0;
 }
 
 function looksLikePromoOrBot(text) {
@@ -214,6 +222,8 @@ module.exports = {
   looksLikePromoOrBot,
   looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
+  looksLikeQuestion,
+  looksLikeSweetQuestion,
   looksLikeUkrainian,
   shouldScanChatEntity,
   isSelfChannelPost,

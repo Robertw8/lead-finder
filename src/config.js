@@ -75,6 +75,9 @@ module.exports = {
   rejectBuySellOffers: b("REJECT_BUY_SELL_OFFERS", true),
   rejectUkrainian: b("REJECT_UKRAINIAN", true),
   requireQuestionOrClaim: b("REQUIRE_QUESTION_OR_CLAIM", true),
+  onlyQuestions: b("ONLY_QUESTIONS", false),
+  onlySweetQuestions: b("ONLY_SWEET_QUESTIONS", false),
+  outreachFitMin: i("OUTREACH_FIT_MIN", 72, 0),
 
   // что сканить
   // private всегда выключены, а вот каналы можно включать/выключать:

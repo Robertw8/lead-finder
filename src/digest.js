@@ -27,11 +27,18 @@ function createDigest(
     flushing = true;
 
     try {
-      const top = buffer.sort((a, b) => b.score - a.score).slice(0, topLimit);
+      const top = buffer
+        .sort((a, b) => {
+          const pa = Number(a.priorityScore ?? a.score ?? 0);
+          const pb = Number(b.priorityScore ?? b.score ?? 0);
+          if (pb !== pa) return pb - pa;
+          return Number(b.score ?? 0) - Number(a.score ?? 0);
+        })
+        .slice(0, topLimit);
 
       const lines = top.map((x, i) => {
         const preview = (x.text || "").replace(/\s+/g, " ").slice(0, previewChars);
-        return `${i + 1}) [${x.chatTitle}] score=${x.score} cat=${x.category}
+        return `${i + 1}) [${x.chatTitle}] pri=${x.priorityScore ?? x.score} score=${x.score} cat=${x.category} type=${x.leadArchetype || "other"} pain=${x.painLevel ?? 0}
 ${preview}
 ${x.link}
 `;

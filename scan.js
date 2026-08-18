@@ -19,6 +19,7 @@ const {
   normId,
 } = require("./src/tg.js");
 const { createDigest } = require("./src/digest.js");
+const { computePriority } = require("./src/ranking.js");
 
 // -------------------- лимитеры по минуте --------------------
 function makeMinuteLimiter(maxPerMin) {
@@ -231,6 +232,7 @@ function makeMinuteLimiter(maxPerMin) {
         stats.llmLowScore++;
         return;
       }
+      const priority = computePriority(llmRes);
 
       insertLead.run({
         chat_id: chatInfo.id,
@@ -254,7 +256,10 @@ function makeMinuteLimiter(maxPerMin) {
 
       digest.add({
         chatTitle: chatInfo.title,
-        score: llmRes.score ?? 0,
+        score: priority.score,
+        priorityScore: priority.priorityScore,
+        leadArchetype: priority.leadArchetype,
+        painLevel: priority.painLevel,
         category: llmRes.category || "other",
         text,
         angle: llmRes.angle || "",

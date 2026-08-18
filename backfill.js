@@ -5,6 +5,8 @@ const {
   looksLikePromoOrBot,
   looksLikeBuySellOffer,
   looksLikeQuestionOrClaim,
+  looksLikeQuestion,
+  looksLikeSweetQuestion,
   looksLikeUkrainian,
   shouldScanChatEntity,
   isSelfChannelPost,
@@ -16,6 +18,7 @@ const {
   buildLink,
   normId,
 } = require("./src/tg.js");
+const { computePriority } = require("./src/ranking.js");
 
 function makeMinuteLimiter(maxPerMin) {
   let bucket = [];
@@ -121,9 +124,17 @@ function dialogActivitySec(dialog) {
     msgsPassedFilters: 0,
     msgsSkippedBuySell: 0,
     msgsSkippedUkrainian: 0,
+    msgsSkippedQuestionClaim: 0,
+    msgsSkippedQuestionOnly: 0,
+    msgsSkippedSweetQuestion: 0,
     llmCalls: 0,
     llmCacheHits: 0,
     llmRateSkipped: 0,
+    llmSkippedNotLead: 0,
+    llmSkippedLowScore: 0,
+    llmSkippedNotQuestion: 0,
+    llmSkippedNotSweetQuestion: 0,
+    llmSkippedLowOutreachFit: 0,
     leads: 0,
     sendOk: false,
     sendErr: null,
@@ -140,11 +151,17 @@ function dialogActivitySec(dialog) {
         sentLeadsCursor,
         sentLeadsCursor + bf.partialBatchSize,
       );
-      const lines = part.map((x, i) => {
+      const sortedPart = [...part].sort((a, b) => {
+        const pa = Number(a.priorityScore ?? a.score ?? 0);
+        const pb = Number(b.priorityScore ?? b.score ?? 0);
+        if (pb !== pa) return pb - pa;
+        return Number(b.score ?? 0) - Number(a.score ?? 0);
+      });
+      const lines = sortedPart.map((x, i) => {
         const preview = (x.text || "")
           .replace(/\s+/g, " ")
           .slice(0, bf.partialPreviewChars);
-        return `${i + 1}) [${x.chatTitle}] score=${x.score} cat=${x.category}
+        return `${i + 1}) [${x.chatTitle}] pri=${x.priorityScore ?? x.score} score=${x.score} cat=${x.category} type=${x.leadArchetype || "other"} pain=${x.painLevel ?? 0}
 ${preview}
 ${x.link}`;
       });
@@ -173,6 +190,9 @@ ${lines.join("\n\n")}`;
 
   console.log(
     `[backfill] scanning ${stats.dialogsTotal} dialogs (sorted by last activity), since=${stats.sinceIso}, maxLeads=${maxLeads}`,
+  );
+  console.log(
+    `[backfill] questionMode onlyQuestions=${cfg.onlyQuestions} onlySweetQuestions=${cfg.onlySweetQuestions} outreachFitMin=${cfg.outreachFitMin}`,
   );
 
   // основной проход
@@ -248,8 +268,18 @@ ${lines.join("\n\n")}`;
           stats.msgsSkippedUkrainian++;
           continue;
         }
-        if (cfg.requireQuestionOrClaim && !looksLikeQuestionOrClaim(text))
+        if (cfg.requireQuestionOrClaim && !looksLikeQuestionOrClaim(text)) {
+          stats.msgsSkippedQuestionClaim++;
           continue;
+        }
+        if (cfg.onlyQuestions && !looksLikeQuestion(text)) {
+          stats.msgsSkippedQuestionOnly++;
+          continue;
+        }
+        if (cfg.onlySweetQuestions && !looksLikeSweetQuestion(text)) {
+          stats.msgsSkippedSweetQuestion++;
+          continue;
+        }
       } else {
         if (text.trim().length < 8) continue;
       }
@@ -298,8 +328,31 @@ ${lines.join("\n\n")}`;
         stats.llmCalls++;
       }
 
-      if (!llmRes.lead) continue;
-      if ((llmRes.score ?? 0) < cfg.leadScoreMin) continue;
+      if (!llmRes.lead) {
+        stats.llmSkippedNotLead++;
+        continue;
+      }
+      if ((llmRes.score ?? 0) < cfg.leadScoreMin) {
+        stats.llmSkippedLowScore++;
+        continue;
+      }
+      const llmQuestion = llmRes.is_question || llmRes.category === "question";
+      if (cfg.onlyQuestions && !llmQuestion) {
+        stats.llmSkippedNotQuestion++;
+        continue;
+      }
+      const fitScore = llmRes.outreach_fit ?? llmRes.score ?? 0;
+      const llmSweet =
+        llmRes.sweet_question || (llmQuestion && fitScore >= cfg.outreachFitMin);
+      if (cfg.onlySweetQuestions && !llmSweet) {
+        stats.llmSkippedNotSweetQuestion++;
+        continue;
+      }
+      if (cfg.onlySweetQuestions && fitScore < cfg.outreachFitMin) {
+        stats.llmSkippedLowOutreachFit++;
+        continue;
+      }
+      const priority = computePriority(llmRes);
 
       insertLead.run({
         chat_id: chatInfo.id,
@@ -321,7 +374,10 @@ ${lines.join("\n\n")}`;
 
       buffer.push({
         chatTitle: chatInfo.title,
-        score: llmRes.score ?? 0,
+        score: priority.score,
+        priorityScore: priority.priorityScore,
+        leadArchetype: priority.leadArchetype,
+        painLevel: priority.painLevel,
         category: llmRes.category || "other",
         text,
         angle: llmRes.angle || "",
@@ -365,12 +421,19 @@ ${lines.join("\n\n")}`;
   // --- сообщение в Saved Messages ---
   await sendPartialDigest("final-flush");
 
-  const top = buffer.sort((a, b) => b.score - a.score).slice(0, bf.finalTopLimit);
+  const top = buffer
+    .sort((a, b) => {
+      const pa = Number(a.priorityScore ?? a.score ?? 0);
+      const pb = Number(b.priorityScore ?? b.score ?? 0);
+      if (pb !== pa) return pb - pa;
+      return Number(b.score ?? 0) - Number(a.score ?? 0);
+    })
+    .slice(0, bf.finalTopLimit);
   const lines = top.map((x, i) => {
     const preview = (x.text || "")
       .replace(/\s+/g, " ")
       .slice(0, bf.finalPreviewChars);
-    return `${i + 1}) [${x.chatTitle}] score=${x.score} cat=${x.category}
+    return `${i + 1}) [${x.chatTitle}] pri=${x.priorityScore ?? x.score} score=${x.score} cat=${x.category} type=${x.leadArchetype || "other"} pain=${x.painLevel ?? 0}
 ${preview}
 ${x.link}
 `;
@@ -391,10 +454,18 @@ msgsText=${stats.msgsText}
 msgsPassedFilters=${stats.msgsPassedFilters}
 msgsSkippedBuySell=${stats.msgsSkippedBuySell}
 msgsSkippedUkrainian=${stats.msgsSkippedUkrainian}
+msgsSkippedQuestionClaim=${stats.msgsSkippedQuestionClaim}
+msgsSkippedQuestionOnly=${stats.msgsSkippedQuestionOnly}
+msgsSkippedSweetQuestion=${stats.msgsSkippedSweetQuestion}
 
 llmCalls=${stats.llmCalls}
 llmCacheHits=${stats.llmCacheHits}
 llmRateSkipped=${stats.llmRateSkipped}
+llmSkippedNotLead=${stats.llmSkippedNotLead}
+llmSkippedLowScore=${stats.llmSkippedLowScore}
+llmSkippedNotQuestion=${stats.llmSkippedNotQuestion}
+llmSkippedNotSweetQuestion=${stats.llmSkippedNotSweetQuestion}
+llmSkippedLowOutreachFit=${stats.llmSkippedLowOutreachFit}
 
 leads=${stats.leads}
 
